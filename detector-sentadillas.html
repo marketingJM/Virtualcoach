@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Detector de Sentadillas — Prototipo</title>
+<style>
+  :root {
+    --bg: #10151c;
+    --panel: #171f29;
+    --line: #2a3542;
+    --text: #e8edf2;
+    --muted: #7c8b9a;
+    --good: #4fd18b;
+    --bad: #ef6a5f;
+    --accent: #4fa3d1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    padding: 20px 16px 40px;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 {
+    font-size: 1.4rem;
+    font-weight: 600;
+    margin: 0 0 4px;
+  }
+  .sub {
+    color: var(--muted);
+    font-size: 0.9rem;
+    margin: 0 0 20px;
+    line-height: 1.4;
+  }
+  .stage {
+    position: relative;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+    aspect-ratio: 3 / 4;
+    border: 1px solid var(--line);
+  }
+  video, canvas {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+  }
+  video { transform: scaleX(-1); }
+  canvas { transform: scaleX(-1); }
+  .status {
+    position: absolute;
+    bottom: 12px; left: 12px; right: 12px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(10,14,18,0.75);
+    backdrop-filter: blur(6px);
+    font-size: 0.95rem;
+    line-height: 1.3;
+    border-left: 3px solid var(--accent);
+  }
+  .status.good { border-left-color: var(--good); }
+  .status.bad { border-left-color: var(--bad); }
+  .controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  button {
+    flex: 1;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 0.95rem;
+    cursor: pointer;
+  }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #06131c;
+    font-weight: 600;
+  }
+  .metrics {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .metric {
+    flex: 1;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px;
+    text-align: center;
+  }
+  .metric .val {
+    font-size: 1.6rem;
+    font-weight: 700;
+  }
+  .metric .lbl {
+    font-size: 0.75rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+  .note {
+    margin-top: 18px;
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Detector de sentadillas</h1>
+  <p class="sub">Prototipo con MediaPipe Pose. Colócate de perfil frente a la cámara, con espacio suficiente para ver cadera y rodilla completas.</p>
+
+  <div class="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <div class="status" id="status">Presiona "Iniciar cámara" para comenzar</div>
+  </div>
+
+  <div class="controls">
+    <button class="primary" id="startBtn">Iniciar cámara</button>
+    <button id="resetBtn">Reiniciar conteo</button>
+  </div>
+
+  <div class="metrics">
+    <div class="metric">
+      <div class="val" id="angleVal">--°</div>
+      <div class="lbl">Ángulo de rodilla</div>
+    </div>
+    <div class="metric">
+      <div class="val" id="repVal">0</div>
+      <div class="lbl">Repeticiones</div>
+    </div>
+  </div>
+
+  <p class="note">
+    Nota: esto corre 100% en tu navegador (no se envía video a ningún servidor). Si la cámara no responde,
+    necesitas abrir este archivo desde una conexión https (ej. súbelo a GitHub Pages o Netlify) —
+    los navegadores bloquean la cámara en archivos abiertos localmente.
+  </p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+<script>
+const video = document.getElementById('video');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const angleVal = document.getElementById('angleVal');
+const repVal = document.getElementById('repVal');
+const startBtn = document.getElementById('startBtn');
+const resetBtn = document.getElementById('resetBtn');
+
+let repCount = 0;
+let stage = null; // 'up' | 'down'
+let camera = null;
+let started = false;
+
+function angleBetween(a, b, c) {
+  // angle at point b, formed by a-b-c
+  const ab = { x: a.x - b.x, y: a.y - b.y };
+  const cb = { x: c.x - b.x, y: c.y - b.y };
+  const dot = ab.x * cb.x + ab.y * cb.y;
+  const magAb = Math.hypot(ab.x, ab.y);
+  const magCb = Math.hypot(cb.x, cb.y);
+  const cos = dot / (magAb * magCb);
+  return Math.acos(Math.min(1, Math.max(-1, cos))) * (180 / Math.PI);
+}
+
+function pickSide(lm) {
+  // choose the side (left/right) that's more visible
+  const leftVis = (lm[23].visibility || 0) + (lm[25].visibility || 0) + (lm[27].visibility || 0);
+  const rightVis = (lm[24].visibility || 0) + (lm[26].visibility || 0) + (lm[28].visibility || 0);
+  return leftVis >= rightVis
+    ? { hip: lm[23], knee: lm[25], ankle: lm[27], shoulder: lm[11] }
+    : { hip: lm[24], knee: lm[26], ankle: lm[28], shoulder: lm[12] };
+}
+
+function drawSkeleton(lm) {
+  const connections = [
+    [11,13],[13,15],[12,14],[14,16],
+    [11,12],[11,23],[12,24],[23,24],
+    [23,25],[25,27],[24,26],[26,28],
+    [27,29],[27,31],[28,30],[28,32]
+  ];
+  ctx.strokeStyle = '#4fa3d1';
+  ctx.lineWidth = 3;
+  connections.forEach(([i, j]) => {
+    const p1 = lm[i], p2 = lm[j];
+    if (!p1 || !p2) return;
+    ctx.beginPath();
+    ctx.moveTo(p1.x * canvas.width, p1.y * canvas.height);
+    ctx.lineTo(p2.x * canvas.width, p2.y * canvas.height);
+    ctx.stroke();
+  });
+  lm.forEach(p => {
+    if (!p) return;
+    ctx.fillStyle = '#e8edf2';
+    ctx.beginPath();
+    ctx.arc(p.x * canvas.width, p.y * canvas.height, 4, 0, 2 * Math.PI);
+    ctx.fill();
+  });
+}
+
+function setStatus(text, kind) {
+  statusEl.textContent = text;
+  statusEl.className = 'status' + (kind ? ' ' + kind : '');
+}
+
+function onResults(results) {
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  ctx.save();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  if (!results.poseLandmarks) {
+    setStatus('No se detecta el cuerpo completo. Aléjate un poco de la cámara.');
+    ctx.restore();
+    return;
+  }
+
+  const lm = results.poseLandmarks;
+  drawSkeleton(lm);
+
+  const side = pickSide(lm);
+  const kneeAngle = angleBetween(side.hip, side.knee, side.ankle);
+  const backAngle = angleBetween(side.shoulder, side.hip, side.knee);
+
+  angleVal.textContent = Math.round(kneeAngle) + '°';
+
+  // squat state machine
+  if (kneeAngle < 100) {
+    if (stage !== 'down') {
+      stage = 'down';
+    }
+  }
+  if (kneeAngle > 160) {
+    if (stage === 'down') {
+      repCount++;
+      repVal.textContent = repCount;
+    }
+    stage = 'up';
+  }
+
+  // feedback logic
+  if (kneeAngle < 100 && backAngle < 45) {
+    setStatus('Espalda muy inclinada hacia adelante — mantén el pecho más erguido.', 'bad');
+  } else if (kneeAngle < 100 && kneeAngle > 70) {
+    setStatus('Buena profundidad de sentadilla. Sigue así.', 'good');
+  } else if (kneeAngle <= 70) {
+    setStatus('Bajaste mucho — cuidado con la presión en las rodillas.', 'bad');
+  } else if (kneeAngle >= 160) {
+    setStatus('Posición de pie. Empieza a bajar controlando el movimiento.');
+  } else {
+    setStatus('Bajando... mantén las rodillas alineadas con los pies.');
+  }
+
+  ctx.restore();
+}
+
+const pose = new Pose({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+});
+pose.setOptions({
+  modelComplexity: 1,
+  smoothLandmarks: true,
+  minDetectionConfidence: 0.6,
+  minTrackingConfidence: 0.6
+});
+pose.onResults(onResults);
+
+startBtn.addEventListener('click', async () => {
+  if (started) return;
+  started = true;
+  setStatus('Solicitando acceso a la cámara...');
+  try {
+    camera = new Camera(video, {
+      onFrame: async () => { await pose.send({ image: video }); },
+      width: 480,
+      height: 640
+    });
+    await camera.start();
+    setStatus('Cámara activa. Ubícate de perfil para ver tu sentadilla.');
+    startBtn.textContent = 'Cámara activa';
+  } catch (err) {
+    setStatus('No se pudo acceder a la cámara: ' + err.message, 'bad');
+    started = false;
+  }
+});
+
+resetBtn.addEventListener('click', () => {
+  repCount = 0;
+  repVal.textContent = '0';
+  stage = null;
+});
+</script>
+</body>
+</html>
