@@ -107,6 +107,18 @@
     color: var(--muted);
     margin-top: 2px;
   }
+  .voice-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 14px;
+    font-size: 0.9rem;
+    color: var(--muted);
+  }
+  .voice-toggle input {
+    width: 18px;
+    height: 18px;
+  }
   .note {
     margin-top: 18px;
     font-size: 0.8rem;
@@ -131,6 +143,11 @@
     <button id="switchBtn">Cambiar cámara</button>
     <button id="resetBtn">Reiniciar conteo</button>
   </div>
+
+  <label class="voice-toggle">
+    <input type="checkbox" id="voiceToggle" checked>
+    Retroalimentación por voz
+  </label>
 
   <div class="metrics">
     <div class="metric">
@@ -162,6 +179,7 @@ const repVal = document.getElementById('repVal');
 const startBtn = document.getElementById('startBtn');
 const switchBtn = document.getElementById('switchBtn');
 const resetBtn = document.getElementById('resetBtn');
+const voiceToggle = document.getElementById('voiceToggle');
 
 let repCount = 0;
 let stage = null; // 'up' | 'down'
@@ -169,6 +187,24 @@ let camera = null;
 let started = false;
 let facingMode = 'user'; // 'user' = frontal, 'environment' = trasera
 let rawStream = null;
+let lastSpoken = '';
+let lastSpokenAt = 0;
+const SPEAK_COOLDOWN_MS = 2500;
+
+function speak(text, { force = false } = {}) {
+  if (!voiceToggle.checked) return;
+  if (!('speechSynthesis' in window)) return;
+  const now = Date.now();
+  if (!force && text === lastSpoken && (now - lastSpokenAt) < SPEAK_COOLDOWN_MS) return;
+  if (!force && (now - lastSpokenAt) < 900) return; // evita solapar frases muy seguidas
+  window.speechSynthesis.cancel();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = 'es-ES';
+  utter.rate = 1.05;
+  window.speechSynthesis.speak(utter);
+  lastSpoken = text;
+  lastSpokenAt = now;
+}
 
 function updateMirror() {
   const isFront = facingMode === 'user';
@@ -258,6 +294,7 @@ function onResults(results) {
     if (stage === 'down') {
       repCount++;
       repVal.textContent = repCount;
+      speak(String(repCount), { force: true });
     }
     stage = 'up';
   }
@@ -265,10 +302,12 @@ function onResults(results) {
   // feedback logic
   if (kneeAngle < 100 && backAngle < 45) {
     setStatus('Espalda muy inclinada hacia adelante — mantén el pecho más erguido.', 'bad');
+    speak('Espalda más recta');
   } else if (kneeAngle < 100 && kneeAngle > 70) {
     setStatus('Buena profundidad de sentadilla. Sigue así.', 'good');
   } else if (kneeAngle <= 70) {
     setStatus('Bajaste mucho — cuidado con la presión en las rodillas.', 'bad');
+    speak('Cuidado, no bajes tanto');
   } else if (kneeAngle >= 160) {
     setStatus('Posición de pie. Empieza a bajar controlando el movimiento.');
   } else {
@@ -307,6 +346,7 @@ async function startCamera() {
     started = true;
     setStatus('Cámara activa (' + (facingMode === 'user' ? 'frontal' : 'trasera') + '). Ubícate de perfil para ver tu sentadilla.');
     startBtn.textContent = 'Cámara activa';
+    speak('Cámara lista. Comienza cuando quieras.', { force: true });
   } catch (err) {
     setStatus('No se pudo acceder a la cámara: ' + err.message, 'bad');
     started = false;
@@ -332,6 +372,8 @@ resetBtn.addEventListener('click', () => {
   repCount = 0;
   repVal.textContent = '0';
   stage = null;
+  lastSpoken = '';
+  speak('Contador reiniciado', { force: true });
 });
 </script>
 </body>
