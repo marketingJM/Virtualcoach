@@ -189,18 +189,23 @@ let facingMode = 'user'; // 'user' = frontal, 'environment' = trasera
 let rawStream = null;
 let lastSpoken = '';
 let lastSpokenAt = 0;
-const SPEAK_COOLDOWN_MS = 2500;
+let lastPostureSpeakAt = 0;
+const POSTURE_SPEAK_INTERVAL_MS = 3000;
 
 function speak(text, { force = false } = {}) {
   if (!voiceToggle.checked) return;
   if (!('speechSynthesis' in window)) return;
   const now = Date.now();
-  if (!force && text === lastSpoken && (now - lastSpokenAt) < SPEAK_COOLDOWN_MS) return;
-  if (!force && (now - lastSpokenAt) < 900) return; // evita solapar frases muy seguidas
+  if (!force) {
+    // las correcciones de postura solo hablan cada ~3 segundos, para que se escuchen completas
+    if ((now - lastPostureSpeakAt) < POSTURE_SPEAK_INTERVAL_MS) return;
+    if (window.speechSynthesis.speaking) return;
+    lastPostureSpeakAt = now;
+  }
   window.speechSynthesis.cancel();
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = 'es-ES';
-  utter.rate = 1.05;
+  utter.rate = 0.95;
   window.speechSynthesis.speak(utter);
   lastSpoken = text;
   lastSpokenAt = now;
