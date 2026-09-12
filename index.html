@@ -50,8 +50,7 @@
     width: 100%; height: 100%;
     object-fit: cover;
   }
-  video { transform: scaleX(-1); }
-  canvas { transform: scaleX(-1); }
+  video.mirrored, canvas.mirrored { transform: scaleX(-1); }
   .status {
     position: absolute;
     bottom: 12px; left: 12px; right: 12px;
@@ -129,6 +128,7 @@
 
   <div class="controls">
     <button class="primary" id="startBtn">Iniciar cámara</button>
+    <button id="switchBtn">Cambiar cámara</button>
     <button id="resetBtn">Reiniciar conteo</button>
   </div>
 
@@ -160,12 +160,21 @@ const statusEl = document.getElementById('status');
 const angleVal = document.getElementById('angleVal');
 const repVal = document.getElementById('repVal');
 const startBtn = document.getElementById('startBtn');
+const switchBtn = document.getElementById('switchBtn');
 const resetBtn = document.getElementById('resetBtn');
 
 let repCount = 0;
 let stage = null; // 'up' | 'down'
 let camera = null;
 let started = false;
+let facingMode = 'user'; // 'user' = frontal, 'environment' = trasera
+let rawStream = null;
+
+function updateMirror() {
+  const isFront = facingMode === 'user';
+  video.classList.toggle('mirrored', isFront);
+  canvas.classList.toggle('mirrored', isFront);
+}
 
 function angleBetween(a, b, c) {
   // angle at point b, formed by a-b-c
@@ -280,22 +289,42 @@ pose.setOptions({
 });
 pose.onResults(onResults);
 
-startBtn.addEventListener('click', async () => {
-  if (started) return;
-  started = true;
+async function startCamera() {
   setStatus('Solicitando acceso a la cámara...');
   try {
+    if (camera) {
+      camera.stop();
+      camera = null;
+    }
+    updateMirror();
     camera = new Camera(video, {
       onFrame: async () => { await pose.send({ image: video }); },
       width: 480,
-      height: 640
+      height: 640,
+      facingMode: facingMode
     });
     await camera.start();
-    setStatus('Cámara activa. Ubícate de perfil para ver tu sentadilla.');
+    started = true;
+    setStatus('Cámara activa (' + (facingMode === 'user' ? 'frontal' : 'trasera') + '). Ubícate de perfil para ver tu sentadilla.');
     startBtn.textContent = 'Cámara activa';
   } catch (err) {
     setStatus('No se pudo acceder a la cámara: ' + err.message, 'bad');
     started = false;
+  }
+}
+
+startBtn.addEventListener('click', () => {
+  if (started) return;
+  startCamera();
+});
+
+switchBtn.addEventListener('click', () => {
+  facingMode = facingMode === 'user' ? 'environment' : 'user';
+  if (started) {
+    startCamera();
+  } else {
+    updateMirror();
+    setStatus('Cámara seleccionada: ' + (facingMode === 'user' ? 'frontal' : 'trasera') + '. Presiona "Iniciar cámara".');
   }
 });
 
